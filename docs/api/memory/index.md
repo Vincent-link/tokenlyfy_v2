@@ -75,6 +75,26 @@ def intelligent_tutoring(user_question):
     return enhanced_context
 ```
 
+#### MVP 场景：匿名 ID（无需登录）
+
+在 MVP 阶段快速验证产品价值时，可使用 `get_anonymous_user_id` 替代硬编码 `user_id`，实现 session / 匿名 ID 模式：
+
+```python
+from hello_agents.core import get_anonymous_user_id, reset_session
+from hello_agents.tools import MemoryTool
+
+# ephemeral：每次运行新 ID，适用于演示、测试
+memory_tool = MemoryTool(user_id=get_anonymous_user_id(persist=False), ...)
+
+# persisted：同一设备多次启动复用同一 ID，记忆保留，适用于交互式 MVP
+memory_tool = MemoryTool(user_id=get_anonymous_user_id(persist=True), ...)
+
+# 切换用户：清除持久化，下次 get_anonymous_user_id(persist=True) 将生成新 ID
+reset_session()
+```
+
+持久化路径默认 `memory_data/session_id`，ID 格式 `anon_<uuid12>`。
+
 ### 🔄 完整的使用流程
 
 #### 第一步：存储阶段 - "我要记住什么？"

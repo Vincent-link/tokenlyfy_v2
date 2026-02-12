@@ -23,7 +23,7 @@ from .core.exceptions import HelloAgentsException
 # Agent实现
 from .agents.simple_agent import SimpleAgent
 from .agents.function_call_agent import FunctionCallAgent
-from .agents.react_agent import ReActAgent
+from .agents.react_agent import ReActAgent, MARKET_ANALYSIS_REACT_PROMPT, PERSONALIZED_ANALYSIS_REACT_PROMPT
 from .agents.reflection_agent import ReflectionAgent
 from .agents.plan_solve_agent import PlanAndSolveAgent
 from .agents.tool_aware_agent import ToolAwareSimpleAgent
@@ -52,6 +52,8 @@ __all__ = [
     "SimpleAgent",
     "FunctionCallAgent",
     "ReActAgent",
+    "MARKET_ANALYSIS_REACT_PROMPT",
+    "PERSONALIZED_ANALYSIS_REACT_PROMPT",
     "ReflectionAgent",
     "PlanAndSolveAgent",
     "ToolAwareSimpleAgent",

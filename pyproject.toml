@@ -65,6 +65,7 @@ evaluation = [
     "huggingface_hub>=0.20.0,<1.0.0",  # HuggingFace Hub API
     "evaluate>=0.4.0,<1.0.0",       # 评估工具
     "pandas>=2.0.0,<3.0.0",         # 数据处理和分析
+    "pandas-ta>=0.3.14b",           # 技术指标（crypto_tools technical）
     "matplotlib>=3.7.0,<4.0.0",     # 可视化(可选)
     "seaborn>=0.12.0,<1.0.0",       # 高级可视化(可选)
     "tqdm>=4.65.0,<5.0.0",          # 进度条显示

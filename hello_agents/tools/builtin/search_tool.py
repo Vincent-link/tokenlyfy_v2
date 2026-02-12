@@ -17,8 +17,11 @@ except Exception:  # pragma: no cover - 可选依赖
 
 try:
     from ddgs import DDGS  # type: ignore
-except Exception:  # pragma: no cover - 可选依赖
-    DDGS = None  # type: ignore
+except Exception:
+    try:
+        from duckduckgo_search import DDGS  # type: ignore  # 旧包名兼容
+    except Exception:  # pragma: no cover - 可选依赖
+        DDGS = None  # type: ignore
 
 try:
     from tavily import TavilyClient  # type: ignore
@@ -93,12 +96,83 @@ def _structured_payload(
     answer: str | None = None,
     notices: Iterable[str] | None = None,
 ) -> Dict[str, Any]:
+    results_list = list(results)
+    results_list = _filter_search_results(results_list)
+    if answer and _is_filtered_content(answer):
+        logger.debug("Filtered answer by content")
+        answer = None
     return {
-        "results": list(results),
+        "results": results_list,
         "backend": backend,
         "answer": answer,
         "notices": list(notices or []),
     }
+
+
+# ---------------------------------------------------------------------------
+# 内容过滤：过滤不雅/垃圾搜索结果，避免触发 LLM 内容审核
+# ---------------------------------------------------------------------------
+
+# 域名黑名单：已知垃圾/成人/广告站点（完整域名或特征片段）
+_DOMAIN_BLACKLIST = frozenset({
+    "cccgg49.com",
+    "51吃瓜",
+    "吃瓜app",
+    "榴莲社区",
+    "91porn",
+    "91xxx",
+    ".porn",
+    ".xxx",
+    "torrent",
+    "btseed",
+})
+
+# 内容黑名单关键词：出现则过滤该条结果
+_CONTENT_BLACKLIST = frozenset({
+    "约炮", "口交", "骑乘", "打桩", "探花", "吃瓜app",
+    "发 邮件获取最新 地 址", "长按复制", "点击下载51吃瓜",
+    "porn", "xxx", "nude", "sex video", "adult content",
+})
+
+
+def _is_filtered_domain(url: str) -> bool:
+    """检查 URL 是否来自黑名单域名"""
+    if not url or not isinstance(url, str):
+        return False
+    url_lower = url.lower()
+    for banned in _DOMAIN_BLACKLIST:
+        if banned in url_lower:
+            return True
+    return False
+
+
+def _is_filtered_content(text: str) -> bool:
+    """检查内容是否包含敏感关键词"""
+    if not text or not isinstance(text, str):
+        return False
+    for banned in _CONTENT_BLACKLIST:
+        if banned in text:
+            return True
+    return False
+
+
+def _filter_search_results(results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """过滤掉不雅/垃圾搜索结果，避免触发 LLM 内容审核"""
+    filtered: List[Dict[str, Any]] = []
+    for item in results:
+        url = item.get("url") or ""
+        title = item.get("title") or ""
+        content = item.get("content") or ""
+        raw = item.get("raw_content") or ""
+        combined = f"{title} {content} {raw}".strip()
+        if _is_filtered_domain(url):
+            logger.debug("Filtered result by domain: %s", url[:80])
+            continue
+        if _is_filtered_content(combined):
+            logger.debug("Filtered result by content: %s", combined[:80])
+            continue
+        filtered.append(item)
+    return filtered
 
 
 class SearchTool(Tool):
@@ -375,8 +449,8 @@ class SearchTool(Tool):
         notices: List[str] = []
 
         try:
-            with DDGS(timeout=10) as client:  # type: ignore[call-arg]
-                search_results = client.text(query, max_results=max_results, backend="duckduckgo")
+            client = DDGS()
+            search_results = client.text(query, max_results=max_results)
         except Exception as exc:  # pragma: no cover - 网络异常
             raise RuntimeError(f"DuckDuckGo 搜索失败: {exc}")
 
@@ -610,7 +684,8 @@ class SearchTool(Tool):
 
 # 便捷函数
 
-def search(query: str, backend: str = "hybrid") -> str:
+def search(query: str, backend: str = "duckduckgo") -> str:
+    """默认使用 DuckDuckGo（免费），可传 backend="hybrid" 或 "tavily" 切换"""
     tool = SearchTool(backend=backend)
     return tool.run({"input": query, "backend": backend})  # type: ignore[return-value]
 

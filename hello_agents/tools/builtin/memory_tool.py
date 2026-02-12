@@ -50,17 +50,81 @@ class MemoryTool(Tool):
         self.current_session_id = None
         self.conversation_count = 0
 
+    def _normalize_parameters(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
+        """将 ReAct/ToolRegistry 传入的 input 格式解析为完整参数字典。
+
+        支持简写：memory[store=内容] / memory[recall=查询] / memory[action=summary]
+        ToolRegistry 只传 {"input": input_text}，此处将 input 解析为 action/content/query 等。
+        """
+        if parameters.get("action") is not None:
+            return parameters
+
+        raw = parameters.get("input") or parameters.get("query") or ""
+        if not raw or not isinstance(raw, str):
+            return parameters
+
+        raw = raw.strip()
+        out: Dict[str, Any] = dict(parameters)
+
+        # 先尝试 key=value 对（逗号分隔）
+        if "=" in raw:
+            # store=xxx 或 recall=xxx 或 action=summary
+            if raw.startswith("store="):
+                out["action"] = "add"
+                out["content"] = raw[6:].strip()
+                return out
+            if raw.startswith("recall="):
+                out["action"] = "search"
+                out["query"] = raw[7:].strip()
+                return out
+            # action=summary 或 action=add,content=...
+            for part in raw.split(","):
+                part = part.strip()
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    k, v = k.strip().lower(), v.strip()
+                    if k == "action":
+                        out["action"] = v.lower()
+                    elif k == "store":
+                        out["action"] = "add"
+                        out["content"] = v
+                    elif k == "recall":
+                        out["action"] = "search"
+                        out["query"] = v
+                    elif k == "limit":
+                        try:
+                            out["limit"] = int(v)
+                        except ValueError:
+                            out["limit"] = 10
+                    elif k in ("content", "query", "memory_type", "importance"):
+                        out[k] = v
+            if out.get("action"):
+                return out
+
+        # 无等号：纯关键词
+        lower = raw.lower()
+        if lower in ("summary", "摘要"):
+            out["action"] = "summary"
+        elif lower in ("stats", "统计"):
+            out["action"] = "stats"
+        elif raw:
+            # 整段视为检索查询
+            out["action"] = "search"
+            out["query"] = raw
+        return out
+
     def run(self, parameters: Dict[str, Any]) -> str:
         """执行工具（非展开模式）
 
         Args:
-            parameters: 工具参数字典，必须包含action参数
+            parameters: 工具参数字典，须含 action 或由 input 解析得到（ReAct 简写：store= / recall= / action=summary）
 
         Returns:
             执行结果字符串
         """
+        parameters = self._normalize_parameters(parameters)
         if not self.validate_parameters(parameters):
-            return "❌ 参数验证失败：缺少必需的参数"
+            return "❌ 参数验证失败：缺少必需的参数（可用 store=内容 / recall=查询 / action=summary）"
 
         action = parameters.get("action")
 

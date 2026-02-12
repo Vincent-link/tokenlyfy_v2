@@ -179,7 +179,7 @@ def demo_combined_memory_and_rag():
     # 创建RAG工具
     rag_tool = RAGTool(
         knowledge_base_path="./combo_knowledge_base",
-        embedding_model="local"  # 使用本地嵌入，稳定可靠
+        # embedding_model="local"  # 使用本地嵌入，稳定可靠
     )
 
     # 创建工具注册表并注册两个工具
@@ -415,7 +415,7 @@ def demo_tool_features():
 
     # 创建工具实例
     memory_tool = MemoryTool(user_id="feature_test")
-    rag_tool = RAGTool(knowledge_base_path="./feature_test_kb", embedding_model="local")
+    rag_tool = RAGTool(knowledge_base_path="./feature_test_kb")
 
     print("🧠 MemoryTool 完整操作演示:")
 
@@ -488,7 +488,7 @@ def demo_advanced_features():
     print(f"    整合结果: {result}")
 
     print("\n🔍 RAG系统高级功能:")
-    rag_tool = RAGTool(knowledge_base_path="./advanced_kb", embedding_model="local")
+    rag_tool = RAGTool(knowledge_base_path="./advanced_kb")
 
     # 演示批量添加和智能搜索
     print("\n  1. 批量知识添加:")
@@ -541,7 +541,7 @@ def demo_enhanced_pdf_and_local_embedding():
     # 创建RAG工具
     rag_tool = RAGTool(
         knowledge_base_path="./pdf_demo_kb",
-        embedding_model="local",
+        # embedding_model="local",
         rag_namespace="pdf_test"
     )
     
@@ -652,7 +652,7 @@ def demo_real_world_scenario():
 
     # 创建完整的学习助手系统
     memory_tool = MemoryTool(user_id="student_001")
-    rag_tool = RAGTool(knowledge_base_path="./learning_assistant_kb", embedding_model="local")
+    rag_tool = RAGTool(knowledge_base_path="./learning_assistant_kb")
 
     # 注册工具
     tool_registry = ToolRegistry()

@@ -27,6 +27,11 @@ from .bfcl_evaluation_tool import BFCLEvaluationTool
 from .gaia_evaluation_tool import GAIAEvaluationTool
 from .llm_judge_tool import LLMJudgeTool
 from .win_rate_tool import WinRateTool
+from .crypto_tools import (
+    CryptoMarketTool, FearGreedTool, TechnicalIndicatorTool, FuturesDataTool,
+    get_crypto_price, get_fear_greed, get_technical, get_futures_data,
+    get_crypto_analysis,
+)
 
 __all__ = [
     "SearchTool",
@@ -42,4 +47,13 @@ __all__ = [
     "GAIAEvaluationTool",
     "LLMJudgeTool",
     "WinRateTool",
+    "CryptoMarketTool",
+    "FearGreedTool",
+    "get_crypto_price",
+    "get_fear_greed",
+    "TechnicalIndicatorTool",
+    "get_technical",
+    "FuturesDataTool",
+    "get_futures_data",
+    "get_crypto_analysis",
 ]

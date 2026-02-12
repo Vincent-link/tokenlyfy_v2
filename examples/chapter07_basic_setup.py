@@ -29,8 +29,16 @@ load_dotenv()
 from hello_agents import (
     HelloAgentsLLM,
     SimpleAgent, ReActAgent, ReflectionAgent, PlanAndSolveAgent,
+    MARKET_ANALYSIS_REACT_PROMPT,
+    PERSONALIZED_ANALYSIS_REACT_PROMPT,
     ToolRegistry, search, calculate,
     ToolChain, ToolChainManager, AsyncToolExecutor
+)
+from hello_agents.core import get_anonymous_user_id
+from hello_agents.tools import MemoryTool
+from hello_agents.tools.builtin.crypto_tools import (
+    get_crypto_price, get_fear_greed, get_technical, get_futures_data,
+    get_crypto_analysis,
 )
 
 def demo_simple_agent():
@@ -89,22 +97,29 @@ def demo_react_agent():
         func=calculate
     )
 
+    # 四种记忆：working / episodic / semantic / perceptual（演示用 ephemeral，每次新 ID）
+    memory_tool = MemoryTool(
+        user_id=get_anonymous_user_id(persist=False),
+        memory_types=["working", "episodic", "semantic", "perceptual"]
+    )
+    tool_registry.register_tool(memory_tool)
+
     # 1. 默认配置演示
     print("\n--- 默认配置 ---")
     default_agent = ReActAgent(
         name="通用助手",
         llm=llm,
         tool_registry=tool_registry,
-        max_steps=3
+        max_steps=5
     )
 
-    task1 = "计算 15 * 23 + 45 的结果"
-    print(f"\n🎯 任务: {task1}")
-    try:
-        response = default_agent.run(task1)
-        print(f"\n✅ 默认配置结果: {response}")
-    except Exception as e:
-        print(f"❌ 错误: {e}")
+    # task1 = "计算 15 * 23 + 45 的结果"
+    # print(f"\n🎯 任务: {task1}")
+    # try:
+    #     response = default_agent.run(task1)
+    #     print(f"\n✅ 默认配置结果: {response}")
+    # except Exception as e:
+    #     print(f"❌ 错误: {e}")
 
     # 2. 自定义配置演示 - 研究助手
     print("\n--- 自定义配置：研究助手 ---")
@@ -130,7 +145,7 @@ Action: 选择合适的工具获取信息，格式为：
         llm=llm,
         tool_registry=tool_registry,
         custom_prompt=research_prompt,
-        max_steps=3
+        max_steps=5
     )
 
     task2 = "搜索一下最新的人工智能发展趋势"
@@ -371,15 +386,28 @@ def interactive_demo():
 
     # 创建工具注册表（为ReAct Agent准备）
     tool_registry = ToolRegistry()
-    tool_registry.register_function("search", "网页搜索工具", search)
+    tool_registry.register_function("search", "网页搜索工具，搜索技术分析或新闻资讯", search)
     tool_registry.register_function("calculate", "数学计算工具", calculate)
+    tool_registry.register_function("crypto_analysis", "【首选】一次并行获取价格+技术+恐惧贪婪+合约数据，如 crypto_analysis[BTC 1h]", get_crypto_analysis)
+    tool_registry.register_function("crypto_price", "查询加密货币实时价格、市值、24h涨跌幅（如 BTC,ETH）", get_crypto_price)
+    tool_registry.register_function("fear_greed", "查询加密货币恐惧与贪婪指数（输入天数，如 7）", get_fear_greed)
+    tool_registry.register_function("technical", "查询加密货币技术指标RSI/MACD/布林带/EMA/支撑阻力（如 BTC 1h、ETH 4h）", get_technical)
+    tool_registry.register_function("futures_data", "查询合约市场数据：资金费率、持仓量OI、多空比（如 BTC）", get_futures_data)
+    # 四种记忆：working / episodic / semantic / perceptual（交互式持久化，同一设备保留记忆）
+    memory_tool = MemoryTool(
+        user_id=get_anonymous_user_id(persist=True),
+        memory_types=["working", "episodic", "semantic", "perceptual"]
+    )
+    tool_registry.register_tool(memory_tool)
 
     # 创建不同类型的Agent（展示默认配置的简洁性）
     agents = {
         "1": SimpleAgent("简单助手", llm, "你是一个有用的AI助手。"),
-        "2": ReActAgent("工具助手", llm, tool_registry, max_steps=3),
+        "2": ReActAgent("工具助手", llm, tool_registry, max_steps=12),
         "3": ReflectionAgent("反思助手", llm, max_iterations=2),
-        "4": PlanAndSolveAgent("规划助手", llm)
+        "4": PlanAndSolveAgent("规划助手", llm, tool_registry=tool_registry),
+        "5": ReActAgent("分析助手", llm, tool_registry, max_steps=5, custom_prompt=MARKET_ANALYSIS_REACT_PROMPT),
+        "6": ReActAgent("个性化分析助手", llm, tool_registry, max_steps=5, custom_prompt=PERSONALIZED_ANALYSIS_REACT_PROMPT),
     }
 
     print("\n请选择Agent类型:")
@@ -387,16 +415,18 @@ def interactive_demo():
     print("2. ReActAgent - 工具调用")
     print("3. ReflectionAgent - 反思改进")
     print("4. PlanAndSolveAgent - 规划执行")
+    print("5. 分析助手 - 先结论再四部分（价格位置/技术面/资金面/操作提示）")
+    print("6. 个性化分析助手 - 根据问题定制小标题（如「为什么 69,700 值得抢？」「操作思路：三步走」）")
     print("\n💡 提示：所有Agent都使用默认配置，展示开箱即用的效果")
 
     while True:
-        choice = input("\n请输入选择 (1-4) 或 'quit' 退出: ").strip()
+        choice = input("\n请输入选择 (1-6) 或 'quit' 退出: ").strip()
 
         if choice.lower() in ['quit', 'exit', '退出']:
             break
 
         if choice not in agents:
-            print("❌ 无效选择，请输入1-4")
+            print("❌ 无效选择，请输入1-6")
             continue
 
         agent = agents[choice]
@@ -488,22 +518,22 @@ def main():
 
     try:
         # 1. SimpleAgent演示
-        demo_simple_agent()
+        # demo_simple_agent()
 
         # 2. ReActAgent演示（默认 + 自定义）
-        demo_react_agent()
+        # demo_react_agent()
 
         # 3. ReflectionAgent演示（默认 + 自定义）
-        demo_reflection_agent()
+        # demo_reflection_agent()
 
         # 4. PlanAndSolveAgent演示（默认 + 自定义）
-        demo_plan_solve_agent()
+        # demo_plan_solve_agent()
 
         # 5. 自定义 vs 默认配置对比
-        demo_custom_vs_default()
+        # demo_custom_vs_default()
 
-        # 6. 高级功能演示
-        demo_advanced_features()
+        # # 6. 高级功能演示
+        # demo_advanced_features()
 
         # 7. 交互式演示
         interactive_demo()
