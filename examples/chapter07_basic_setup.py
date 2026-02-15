@@ -384,7 +384,7 @@ def interactive_demo():
     # 创建LLM实例
     llm = HelloAgentsLLM()
 
-    # 创建工具注册表（为ReAct Agent准备）
+    # 创建工具注册表（为 ReAct/PlanAndSolve Agent 准备）
     tool_registry = ToolRegistry()
     tool_registry.register_function("search", "网页搜索工具，搜索技术分析或新闻资讯", search)
     tool_registry.register_function("calculate", "数学计算工具", calculate)
@@ -393,12 +393,23 @@ def interactive_demo():
     tool_registry.register_function("fear_greed", "查询加密货币恐惧与贪婪指数（输入天数，如 7）", get_fear_greed)
     tool_registry.register_function("technical", "查询加密货币技术指标RSI/MACD/布林带/EMA/支撑阻力（如 BTC 1h、ETH 4h）", get_technical)
     tool_registry.register_function("futures_data", "查询合约市场数据：资金费率、持仓量OI、多空比（如 BTC）", get_futures_data)
-    # 四种记忆：working / episodic / semantic / perceptual（交互式持久化，同一设备保留记忆）
     memory_tool = MemoryTool(
         user_id=get_anonymous_user_id(persist=True),
         memory_types=["working", "episodic", "semantic", "perceptual"]
     )
     tool_registry.register_tool(memory_tool)
+
+    # 使用工厂创建加密分析助手（选项 5、6）
+    from hello_agents.assistants import create_crypto_assistant
+    crypto_assistant_personalized = create_crypto_assistant(
+        persist_session=True, max_steps=5, use_rag=True
+    )
+    crypto_assistant_market = create_crypto_assistant(
+        persist_session=True,
+        max_steps=5,
+        use_rag=True,
+        prompt_template=MARKET_ANALYSIS_REACT_PROMPT,
+    )
 
     # 创建不同类型的Agent（展示默认配置的简洁性）
     agents = {
@@ -406,8 +417,8 @@ def interactive_demo():
         "2": ReActAgent("工具助手", llm, tool_registry, max_steps=12),
         "3": ReflectionAgent("反思助手", llm, max_iterations=2),
         "4": PlanAndSolveAgent("规划助手", llm, tool_registry=tool_registry),
-        "5": ReActAgent("分析助手", llm, tool_registry, max_steps=5, custom_prompt=MARKET_ANALYSIS_REACT_PROMPT),
-        "6": ReActAgent("个性化分析助手", llm, tool_registry, max_steps=5, custom_prompt=PERSONALIZED_ANALYSIS_REACT_PROMPT),
+        "5": crypto_assistant_market,
+        "6": crypto_assistant_personalized,
     }
 
     print("\n请选择Agent类型:")

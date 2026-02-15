@@ -34,6 +34,7 @@ from .tools.builtin.search_tool import SearchTool, search
 from .tools.builtin.calculator import CalculatorTool, calculate
 from .tools.chain import ToolChain, ToolChainManager
 from .tools.async_executor import AsyncToolExecutor
+from .assistants import create_crypto_assistant, CryptoAssistantConfig
 
 __all__ = [
     # 版本信息
@@ -68,5 +69,7 @@ __all__ = [
     "ToolChain",
     "ToolChainManager",
     "AsyncToolExecutor",
+    "create_crypto_assistant",
+    "CryptoAssistantConfig",
 ]
 

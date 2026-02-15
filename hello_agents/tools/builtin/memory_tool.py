@@ -25,13 +25,17 @@ class MemoryTool(Tool):
         user_id: str = "default_user",
         memory_config: MemoryConfig = None,
         memory_types: List[str] = None,
-        expandable: bool = False
+        expandable: bool = False,
+        profile_store: Optional[Any] = None,
     ):
         super().__init__(
             name="memory",
             description="记忆工具 - 可以存储和检索对话历史、知识和经验",
             expandable=expandable
         )
+
+        self.user_id = user_id
+        self.profile_store = profile_store  # 可选：存记忆时同步更新用户画像
 
         # 初始化记忆管理器
         self.memory_config = memory_config or MemoryConfig()
@@ -248,7 +252,11 @@ class MemoryTool(Tool):
                 metadata=metadata,
                 auto_classify=False  # 禁用自动分类，使用明确指定的类型
             )
-
+            if self.profile_store and content and getattr(self.profile_store, "update_from_memory_content", None):
+                try:
+                    self.profile_store.update_from_memory_content(self.user_id, content)
+                except Exception:
+                    pass
             return f"✅ 记忆已添加 (ID: {memory_id[:8]}...)"
 
         except Exception as e:

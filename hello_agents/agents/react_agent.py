@@ -1,8 +1,9 @@
 """ReAct Agent实现 - 推理与行动结合的智能体"""
 
 import re
+import time
 from datetime import datetime
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict, Iterator
 from ..core.agent import Agent
 from ..core.llm import HelloAgentsLLM
 from ..core.config import Config
@@ -68,6 +69,10 @@ Action: 选择合适的工具获取信息，格式为：
 - `{{tool_name}}[{{tool_input}}]`：调用工具搜索信息。
 - `Finish[done]`：当你认为已收集到足够信息时（搜索 2～3 次即可），用此结束搜索阶段。
 
+## 记忆工具（若有 memory 工具）
+- **存偏好**：当用户表达投研偏好或说「记住」时，先用 `memory[store=内容]` 存一条，再继续搜数据。例如：用户说「我主要看 BTC」「记住我喜欢短线」「我偏保守」→ 存为 `memory[store=用户主要关注BTC/偏好短线/风险偏好保守]`。
+- **回忆**：若需要结合用户历史偏好或之前分析时，用 `memory[recall=用户偏好 或 币种]` 检索，再继续。
+
 ## 搜索策略（优先一次调用，减少等待）
 1. **`crypto_analysis`** 【首选】一次并行获取价格+技术+恐惧贪婪+合约数据，如 `crypto_analysis[BTC 1h]` 或 `crypto_analysis[ETH 4h]`，周期缺省默认 1h。**单币分析优先用此，可节省 3～4 次调用**。
 2. 若需多币或单工具，再用 `crypto_price`、`technical`、`fear_greed`、`futures_data`。
@@ -105,6 +110,10 @@ Thought: 分析用户问题的关键点，确定还需要搜索什么信息。
 Action: 选择合适的工具获取信息，格式为：
 - `{{tool_name}}[{{tool_input}}]`：调用工具搜索信息。
 - `Finish[done]`：当你认为已收集到足够信息时（2～3 次即可），用此结束搜索阶段。
+
+## 记忆工具（若有 memory 工具）
+- **存偏好**：当用户表达投研偏好或说「记住」时，先用 `memory[store=内容]` 存一条，再继续搜数据。例如：用户说「我主要看 BTC」「记住我喜欢短线」「我偏保守」→ 存为 `memory[store=用户主要关注BTC/偏好短线/风险偏好保守]`。
+- **回忆**：若需要结合用户历史偏好或之前分析时，用 `memory[recall=用户偏好 或 币种]` 检索，再继续。
 
 ## 搜索策略（优先一次调用，减少等待）
 1. **`crypto_analysis`** 【首选】一次并行获取价格+技术+恐惧贪婪+合约数据，如 `crypto_analysis[BTC 1h]` 或 `crypto_analysis[ETH 4h]`。单币分析优先用此，可节省 3～4 次调用。
@@ -151,7 +160,9 @@ class ReActAgent(Agent):
         system_prompt: Optional[str] = None,
         config: Optional[Config] = None,
         max_steps: int = 5,
-        custom_prompt: Optional[str] = None
+        custom_prompt: Optional[str] = None,
+        report_generator=None,
+        response_cache_ttl_seconds: Optional[int] = None,
     ):
         """
         初始化ReActAgent
@@ -164,6 +175,8 @@ class ReActAgent(Agent):
             config: 配置对象
             max_steps: 最大执行步数
             custom_prompt: 自定义提示词模板
+            report_generator: 报告生成器（分析类模板两阶段时使用），None 则使用默认
+            response_cache_ttl_seconds: 分析类下同问缓存时长（秒），None 表示不缓存
         """
         super().__init__(name, llm, system_prompt, config)
 
@@ -178,6 +191,20 @@ class ReActAgent(Agent):
 
         # 设置提示词模板：用户自定义优先，否则使用默认模板
         self.prompt_template = custom_prompt if custom_prompt else DEFAULT_REACT_PROMPT
+
+        # 报告生成器：外部注入或默认创建
+        if report_generator is not None:
+            self.report_generator = report_generator
+        else:
+            try:
+                from ...assistants.report_generator import ReportGenerator
+                self.report_generator = ReportGenerator(llm)
+            except ImportError:
+                self.report_generator = None
+
+        # 短时同问复用：分析类下 (问题归一化 -> (答案, 时间戳))，TTL 内直接返回
+        self.response_cache_ttl_seconds = response_cache_ttl_seconds
+        self._response_cache: Dict[str, Tuple[str, float]] = {}
 
     def add_tool(self, tool):
         """
@@ -213,6 +240,14 @@ class ReActAgent(Agent):
     def _is_analysis_template(self) -> bool:
         """判断当前使用的是否为分析类模板（两阶段模式）"""
         return "信息收集模块" in self.prompt_template
+
+    @staticmethod
+    def _normalize_question_for_cache(question: str, max_len: int = 120) -> str:
+        """归一化问题用于缓存 key：去空格、小写、截长，便于短时同问命中"""
+        if not question or not isinstance(question, str):
+            return ""
+        t = re.sub(r"\s+", " ", question.strip().lower())
+        return t[:max_len] if len(t) > max_len else t
 
     def _check_crypto_intent(self, question: str, recent_dialogue: str) -> Optional[str]:
         """检查用户问题是否属于加密货币投研领域。
@@ -284,6 +319,25 @@ class ReActAgent(Agent):
             return content
         except FileNotFoundError:
             return ""
+
+    def _invoke_report_generator(
+        self, input_text: str, history_str: str,
+        current_date: str, recent_dialogue: str, **kwargs
+    ) -> str:
+        """调用报告生成器或回退到内置实现"""
+        if self.report_generator:
+            is_fixed = "价格位置" in self.prompt_template
+            history_objs = self.get_history()
+            return self.report_generator.generate(
+                question=input_text,
+                observations=history_str,
+                recent_dialogue=recent_dialogue,
+                current_date=current_date,
+                conversation_history=history_objs,
+                is_fixed_template=is_fixed,
+                **kwargs
+            )
+        return self._generate_report(input_text, history_str, current_date, recent_dialogue, **kwargs)
 
     def _get_previous_prediction(self, max_content_len: int = 600) -> str:
         """从对话历史中提取最近一次分析预测，供「前次预测回顾」使用（P2）"""
@@ -426,21 +480,26 @@ class ReActAgent(Agent):
             lines.append(f"{role}: {content}")
         return "\n".join(lines) if lines else "（无此前对话）"
 
-    def run(self, input_text: str, **kwargs) -> str:
+    def run(self, input_text: str, collect_only: bool = False, **kwargs) -> str:
         """
         运行ReAct Agent
-        
+
         Args:
             input_text: 用户问题
-            **kwargs: 其他参数
-            
+            collect_only: 仅收集阶段（分析类模板下到 Finish[done] 时只返回 observations，不生成报告）
+            **kwargs: 其他参数，可含 request_id（用于日志追踪）、以及传给 LLM 的参数
+
         Returns:
-            最终答案
+            最终答案，或 collect_only 时为 observations 字符串
         """
+        request_id = kwargs.get("request_id")
+        prefix = f"[{request_id}] " if request_id else ""
+        t_start = time.time()
+
         self.current_history = []
         current_step = 0
         recent_dialogue = self._format_recent_dialogue()
-        
+
         # 分析类模板：先做意图检查，非加密问题直接拒绝
         if self._is_analysis_template():
             rejection = self._check_crypto_intent(input_text, recent_dialogue)
@@ -448,12 +507,30 @@ class ReActAgent(Agent):
                 self.add_message(Message(input_text, "user"))
                 self.add_message(Message(rejection, "assistant"))
                 return rejection
-        
-        print(f"\n🤖 {self.name} 开始处理问题: {input_text}")
+            # 短时同问复用：TTL 内相同/相似问题直接返回缓存答案
+            if self.response_cache_ttl_seconds is not None and self.response_cache_ttl_seconds > 0:
+                cache_key = self._normalize_question_for_cache(input_text)
+                if cache_key:
+                    now = time.time()
+                    if cache_key in self._response_cache:
+                        cached_ans, cached_ts = self._response_cache[cache_key]
+                        if now - cached_ts < self.response_cache_ttl_seconds:
+                            self.add_message(Message(input_text, "user"))
+                            self.add_message(Message(cached_ans, "assistant"))
+                            print(f"\n{prefix}📦 使用缓存答案（{int(now - cached_ts)}s 内同问）")
+                            return cached_ans
+                    # 过期或未命中则继续执行，稍后写入缓存
+                    self._response_cache_key = cache_key
+                else:
+                    self._response_cache_key = None
+        else:
+            self._response_cache_key = None
+
+        print(f"\n{prefix}🤖 {self.name} 开始处理问题: {input_text}")
         
         while current_step < self.max_steps:
             current_step += 1
-            print(f"\n--- 第 {current_step} 步 ---")
+            print(f"\n{prefix}--- 第 {current_step} 步 ---")
             
             # 构建提示词（注入当前日期与最近对话，供模型判断时效性和上下文）
             tools_desc = self.tool_registry.get_tools_description()
@@ -475,17 +552,17 @@ class ReActAgent(Agent):
             response_text = self.llm.invoke(messages, **kwargs)
             
             if not response_text:
-                print("❌ 错误：LLM未能返回有效响应。")
+                print(f"{prefix}❌ 错误：LLM未能返回有效响应。")
                 break
             
             # 解析输出
             thought, action = self._parse_output(response_text)
             
             if thought:
-                print(f"🤔 思考: {thought}")
-            
+                print(f"{prefix}🤔 思考: {thought}")
+
             if not action:
-                print("⚠️ 警告：未能解析出有效的Action，流程终止。")
+                print(f"{prefix}⚠️ 警告：未能解析出有效的Action，流程终止。")
                 break
             
             # 检查是否完成
@@ -494,21 +571,29 @@ class ReActAgent(Agent):
                 is_analysis_prompt = self._is_analysis_template()
                 
                 if is_analysis_prompt:
-                    # ===== 分析类：搜索阶段结束，进入独立的报告生成阶段 =====
-                    print("📝 搜索完毕，正在生成分析报告…")
-                    final_answer = self._generate_report(
+                    # ===== 分析类：搜索阶段结束 =====
+                    if collect_only:
+                        print(f"{prefix}📝 搜索完毕（仅收集，耗时 {time.time() - t_start:.1f}s）")
+                        return history_str
+                    t_report = time.time()
+                    print(f"{prefix}📝 搜索完毕，正在生成分析报告…（搜索阶段耗时 {t_report - t_start:.1f}s）")
+                    final_answer = self._invoke_report_generator(
                         input_text, history_str, current_date, recent_dialogue, **kwargs
                     )
+                    print(f"{prefix}📄 报告生成耗时 {time.time() - t_report:.1f}s")
                 else:
                     # ===== 普通 ReAct：Finish 里的内容就是答案 =====
                     final_answer = self._parse_action_input(action)
                     if not final_answer and thought:
                         final_answer = thought.strip()
                 
+                # 短时同问缓存
+                if getattr(self, "_response_cache_key", None) and final_answer:
+                    self._response_cache[self._response_cache_key] = (final_answer, time.time())
                 # 保存到历史记录
                 self.add_message(Message(input_text, "user"))
                 self.add_message(Message(final_answer, "assistant"))
-                
+                print(f"{prefix}✅ 总耗时 {time.time() - t_start:.1f}s")
                 return final_answer
             
             # 执行工具调用
@@ -517,11 +602,11 @@ class ReActAgent(Agent):
                 self.current_history.append("Observation: 无效的Action格式，请检查。")
                 continue
             
-            print(f"🎬 行动: {tool_name}[{tool_input}]")
-            
+            print(f"{prefix}🎬 行动: {tool_name}[{tool_input}]")
+
             # 调用工具
             observation = self.tool_registry.execute_tool(tool_name, tool_input)
-            print(f"👀 观察: {observation}")
+            print(f"{prefix}👀 观察: {observation}")
             
             # 更新历史
             self.current_history.append(f"Action: {action}")
@@ -529,21 +614,76 @@ class ReActAgent(Agent):
         
         # 达到最大步数：分析类仍然尝试基于已有观察生成报告
         if self._is_analysis_template() and self.current_history:
-            print("⏰ 已达到最大步数，基于已有观察生成报告…")
             history_str = "\n".join(self.current_history)
+            if collect_only:
+                print(f"{prefix}⏰ 已达到最大步数（仅收集）")
+                return history_str
+            print(f"{prefix}⏰ 已达到最大步数，基于已有观察生成报告…")
             current_date = datetime.now().strftime("%Y年%m月%d日 %H:%M")
-            final_answer = self._generate_report(
+            t_report = time.time()
+            final_answer = self._invoke_report_generator(
                 input_text, history_str, current_date, recent_dialogue, **kwargs
             )
+            print(f"{prefix}📄 报告生成耗时 {time.time() - t_report:.1f}s")
         else:
-            print("⏰ 已达到最大步数，流程终止。")
+            print(f"{prefix}⏰ 已达到最大步数，流程终止。")
             final_answer = "抱歉，我无法在限定步数内完成这个任务。"
-        
+
+        # 短时同问缓存
+        if getattr(self, "_response_cache_key", None) and final_answer:
+            self._response_cache[self._response_cache_key] = (final_answer, time.time())
         # 保存到历史记录
         self.add_message(Message(input_text, "user"))
         self.add_message(Message(final_answer, "assistant"))
-        
+        print(f"{prefix}✅ 总耗时 {time.time() - t_start:.1f}s")
         return final_answer
+
+    def run_collect_only(self, input_text: str, **kwargs) -> str:
+        """仅执行收集阶段，返回 observations 字符串（分析类模板下用于编排器/流式报告）。"""
+        return self.run(input_text, collect_only=True, **kwargs)
+
+    def run_stream(self, input_text: str, **kwargs) -> Iterator[str]:
+        """流式运行：先收集数据，再流式生成报告并逐 chunk 产出。仅分析类模板有效。"""
+        if not self._is_analysis_template() or not getattr(self, "report_generator", None):
+            full = self.run(input_text, **kwargs)
+            yield full
+            return
+        request_id = kwargs.get("request_id")
+        prefix = f"[{request_id}] " if request_id else ""
+        recent_dialogue = self._format_recent_dialogue()
+        # 缓存检查（与 run 一致）
+        if self.response_cache_ttl_seconds and self.response_cache_ttl_seconds > 0:
+            cache_key = self._normalize_question_for_cache(input_text)
+            if cache_key and cache_key in self._response_cache:
+                now = time.time()
+                cached_ans, cached_ts = self._response_cache[cache_key]
+                if now - cached_ts < self.response_cache_ttl_seconds:
+                    self.add_message(Message(input_text, "user"))
+                    self.add_message(Message(cached_ans, "assistant"))
+                    yield cached_ans
+                    return
+        observations = self.run_collect_only(input_text, **kwargs)
+        current_date = datetime.now().strftime("%Y年%m月%d日 %H:%M")
+        history = self.get_history()
+        is_fixed = "价格位置" in self.prompt_template
+        acc = []
+        for chunk in self.report_generator.generate_stream(
+            question=input_text,
+            observations=observations,
+            recent_dialogue=recent_dialogue,
+            current_date=current_date,
+            conversation_history=history,
+            is_fixed_template=is_fixed,
+            **kwargs
+        ):
+            acc.append(chunk)
+            yield chunk
+        final_answer = "".join(acc).strip() or "抱歉，报告生成失败，请重试。"
+        self._response_cache_key = self._normalize_question_for_cache(input_text) if self.response_cache_ttl_seconds else None
+        if self._response_cache_key and final_answer:
+            self._response_cache[self._response_cache_key] = (final_answer, time.time())
+        self.add_message(Message(input_text, "user"))
+        self.add_message(Message(final_answer, "assistant"))
     
     def _parse_output(self, text: str) -> Tuple[Optional[str], Optional[str]]:
         """解析LLM输出，提取思考和行动"""
